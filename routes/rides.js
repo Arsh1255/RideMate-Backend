@@ -4,6 +4,9 @@ const admin = require("../config/firebase");
 const Ride = require("../models/Ride");
 const User = require("../models/User");
 const Request = require("../models/Request");
+const Message = require("../models/Message");
+const { getIO, EVENTS } = require("../services/socket");
+const { getOrCreateMongoUser } = require("../utils/authHealer");
 
 // Helper for distance calculation (Haversine formula)
 function getDistance(lat1, lon1, lat2, lon2) {
@@ -34,10 +37,7 @@ router.post("/create", async (req, res) => {
         console.log("--> Token verified for UID:", decoded.uid);
 
         // 2. FIND CURRENT USER
-        const currentUser = await User.findOne({ uid: decoded.uid });
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found in database" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const payload = req.body;
 
@@ -121,10 +121,7 @@ router.post("/search", async (req, res) => {
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
 
-        const currentUser = await User.findOne({ uid: decoded.uid });
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found in database" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const { source, destination, date, time, flexibleTime, seatsNeeded, mode, matchAccuracy } = req.body;
 
@@ -207,6 +204,47 @@ router.get("/:id", async (req, res) => {
     }
 });
 
+router.get("/:id/messages", async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            return res.status(401).json({ message: "No token provided" });
+        }
+        const token = authHeader.split("Bearer ")[1];
+        const decoded = await admin.auth().verifyIdToken(token);
+        const currentUser = await getOrCreateMongoUser(decoded);
+
+        const ride = await Ride.findById(req.params.id);
+        if (!ride) {
+            return res.status(404).json({ message: "Ride not found" });
+        }
+
+        const isCreator = ride.creatorId.toString() === currentUser._id.toString();
+        const isParticipant = ride.participantIds.some(id => id.toString() === currentUser._id.toString());
+
+        if (!isCreator && !isParticipant) {
+            return res.status(403).json({ message: "You are not authorized to view messages for this ride" });
+        }
+
+        const messages = await Message.find({ rideId: ride._id })
+            .sort({ createdAt: 1 })
+            .populate('senderId', 'name profilePic uid');
+
+        const mappedMessages = messages.map(m => ({
+            _id: m._id,
+            rideId: m.rideId,
+            text: m.text,
+            createdAt: m.createdAt,
+            sender: m.senderId
+        }));
+
+        return res.status(200).json({ messages: mappedMessages });
+
+    } catch (err) {
+        console.error("Error fetching messages:", err);
+        return res.status(500).json({ message: "Internal server error" });
+    }
+});
 
 router.post("/requests/create", async (req, res) => {
     console.log("--> POST /api/rides/requests/create called");
@@ -218,10 +256,7 @@ router.post("/requests/create", async (req, res) => {
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
 
-        const currentUser = await User.findOne({ uid: decoded.uid });
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found in database" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const { rideId, seatsRequested, pickupLocation } = req.body;
 
@@ -256,6 +291,13 @@ router.post("/requests/create", async (req, res) => {
         ride.pendingRequests.push(savedRequest._id);
         await ride.save();
 
+        // Emit socket event to creator
+        const creator = await User.findById(ride.creatorId);
+        if (creator) {
+            const io = getIO();
+            io.to(`user_${creator.uid}`).emit(EVENTS.REQUEST_CREATED, { rideId: ride._id });
+        }
+
         return res.status(201).json({ message: "Request created successfully", request: savedRequest });
 
     } catch (err) {
@@ -274,10 +316,7 @@ router.post("/requests/:id/accept", async (req, res) => {
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
 
-        const currentUser = await User.findOne({ uid: decoded.uid });
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const request = await Request.findById(req.params.id);
         if (!request) {
@@ -314,6 +353,16 @@ router.post("/requests/:id/accept", async (req, res) => {
         ride.availableSeats -= request.seatsRequested;
         await ride.save();
 
+        // Emit events
+        const requester = await User.findById(request.userId);
+        const io = getIO();
+        
+        if (requester) {
+            io.to(`user_${requester.uid}`).emit(EVENTS.REQUEST_ACCEPTED, { rideId: ride._id });
+        }
+        
+        io.to(`ride_${ride._id}`).emit(EVENTS.PARTICIPANT_JOINED, { rideId: ride._id });
+
         return res.status(200).json({ message: "Request accepted successfully", ride });
 
     } catch (err) {
@@ -332,10 +381,7 @@ router.post("/requests/:id/reject", async (req, res) => {
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
 
-        const currentUser = await User.findOne({ uid: decoded.uid });
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const request = await Request.findById(req.params.id);
         if (!request) {
@@ -366,6 +412,13 @@ router.post("/requests/:id/reject", async (req, res) => {
         ride.pendingRequests = ride.pendingRequests.filter(id => id.toString() !== request._id.toString());
         await ride.save();
 
+        // Emit event to requester
+        const requester = await User.findById(request.userId);
+        if (requester) {
+            const io = getIO();
+            io.to(`user_${requester.uid}`).emit(EVENTS.REQUEST_REJECTED, { rideId: ride._id });
+        }
+
         return res.status(200).json({ message: "Request rejected successfully", ride });
 
     } catch (err) {
@@ -383,11 +436,7 @@ router.post("/:id/start", async (req, res) => {
         }
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
-        const currentUser = await User.findOne({ uid: decoded.uid });
-
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const ride = await Ride.findById(req.params.id);
         if (!ride) {
@@ -411,6 +460,17 @@ router.post("/:id/start", async (req, res) => {
         ride.status = 'started';
         await ride.save();
 
+        // Emit event to ride room
+        const io = getIO();
+        io.to(`ride_${ride._id}`).emit(EVENTS.RIDE_STARTED, { rideId: ride._id });
+
+        // Also emit to all participants' personal rooms for guaranteed delivery
+        const participants = await User.find({ _id: { $in: ride.participantIds } });
+        for (const participant of participants) {
+            console.log(`Emitting RIDE_STARTED to user_${participant.uid}`);
+            io.to(`user_${participant.uid}`).emit(EVENTS.RIDE_STARTED, { rideId: ride._id });
+        }
+
         return res.status(200).json({ message: "Ride started successfully", ride });
 
     } catch (err) {
@@ -427,11 +487,7 @@ router.post("/:id/complete", async (req, res) => {
         }
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
-        const currentUser = await User.findOne({ uid: decoded.uid });
-
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const ride = await Ride.findById(req.params.id);
         if (!ride) {
@@ -487,6 +543,24 @@ router.post("/:id/complete", async (req, res) => {
         ride.status = 'completed';
         await ride.save();
 
+        // Emit event to ride room
+        const io = getIO();
+        io.to(`ride_${ride._id}`).emit(EVENTS.RIDE_COMPLETED, { 
+            rideId: ride._id,
+            ecoScoreGained,
+            co2Saved
+        });
+
+        // Also emit to all participants' personal rooms for guaranteed delivery
+        for (const participant of participants) {
+            console.log(`Emitting RIDE_COMPLETED to user_${participant.uid}`);
+            io.to(`user_${participant.uid}`).emit(EVENTS.RIDE_COMPLETED, { 
+                rideId: ride._id,
+                ecoScoreGained,
+                co2Saved
+            });
+        }
+
         return res.status(200).json({ message: "Ride completed successfully", ride });
 
     } catch (err) {
@@ -503,11 +577,7 @@ router.post("/:id/cancel", async (req, res) => {
         }
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
-        const currentUser = await User.findOne({ uid: decoded.uid });
-
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const ride = await Ride.findById(req.params.id);
         if (!ride) {
@@ -520,6 +590,10 @@ router.post("/:id/cancel", async (req, res) => {
 
         ride.status = 'cancelled';
         await ride.save();
+
+        // Emit event to ride room
+        const io = getIO();
+        io.to(`ride_${ride._id}`).emit(EVENTS.RIDE_CANCELLED, { rideId: ride._id });
 
         return res.status(200).json({ message: "Ride cancelled successfully", ride });
 
@@ -537,11 +611,7 @@ router.post("/:id/leave", async (req, res) => {
         }
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
-        const currentUser = await User.findOne({ uid: decoded.uid });
-
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const ride = await Ride.findById(req.params.id);
         if (!ride) {
@@ -559,6 +629,10 @@ router.post("/:id/leave", async (req, res) => {
 
         await Request.deleteOne({ rideId: ride._id, userId: currentUser._id });
 
+        // Emit event to ride room
+        const io = getIO();
+        io.to(`ride_${ride._id}`).emit(EVENTS.PARTICIPANT_LEFT, { rideId: ride._id, userId: currentUser._id });
+
         return res.status(200).json({ message: "You have left the ride", ride });
 
     } catch (err) {
@@ -575,11 +649,7 @@ router.post("/:id/remove-participant", async (req, res) => {
         }
         const token = authHeader.split("Bearer ")[1];
         const decoded = await admin.auth().verifyIdToken(token);
-        const currentUser = await User.findOne({ uid: decoded.uid });
-
-        if (!currentUser) {
-            return res.status(404).json({ message: "User not found" });
-        }
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         const ride = await Ride.findById(req.params.id);
         if (!ride) {

@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
+const { getOrCreateMongoUser } = require("../utils/authHealer");
 const admin = require("../config/firebase");
 
 const User = require("../models/User");
@@ -28,7 +29,7 @@ router.get("/:id", async (req, res) => {
             authHeader.split("Bearer ")[1];
 
         console.log("--> Verifying Firebase token...");
-        await admin
+        const decoded = await admin
             .auth()
             .verifyIdToken(token);
         console.log("--> Token verified successfully.");
@@ -36,49 +37,32 @@ router.get("/:id", async (req, res) => {
         // ---------------- FIND USER ----------------
 
         console.log("--> Searching DB for user with uid:", req.params.id);
-        const user =
-            await User.findOne({
-                uid: req.params.id,
-            });
-        console.log("--> User search complete. Found:", user ? "Yes" : "No");
+        
+        // Use authHealer to ensure user exists
+        const user = await getOrCreateMongoUser(decoded);
+        console.log("--> User search/heal complete.");
 
-        if (!user) {
-
-            return res.status(404).json({
-                message: "User not found",
-            });
+        // We check against req.params.id if it's different from current user
+        let targetUser = user;
+        if (req.params.id !== decoded.uid) {
+            targetUser = await User.findOne({ uid: req.params.id });
+            if (!targetUser) {
+                return res.status(404).json({ message: "User not found" });
+            }
         }
 
         // ---------------- RESPONSE ----------------
 
         return res.status(200).json({
-
-            id:
-                user._id,
-
-            uid:
-                user.uid,
-
-            name:
-                user.name,
-
-            email:
-                user.email,
-
-            profilePic:
-                user.profilePic,
-
-            ecoScore:
-                user.ecoScore,
-
-            co2Saved:
-                user.co2Saved,
-
-            ridesTaken:
-                user.ridesTaken,
-
-            peopleSharedWith:
-                user.peopleSharedWith,
+            id: targetUser._id,
+            uid: targetUser.uid,
+            name: targetUser.name,
+            email: targetUser.email,
+            profilePic: targetUser.profilePic,
+            ecoScore: targetUser.ecoScore,
+            co2Saved: targetUser.co2Saved,
+            ridesTaken: targetUser.ridesTaken,
+            peopleSharedWith: targetUser.peopleSharedWith,
         });
 
     } catch (err) {

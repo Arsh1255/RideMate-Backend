@@ -35,16 +35,8 @@ router.get("/", async (req, res) => {
 
         // ---------------- FIND CURRENT USER ----------------
 
-        const currentUser =
-            await User.findOne({
-                uid: decoded.uid,
-            });
-
-        if (!currentUser) {
-            return res.status(404).json({
-                message: "User not found",
-            });
-        }
+        const { getOrCreateMongoUser } = require("../utils/authHealer");
+        const currentUser = await getOrCreateMongoUser(decoded);
 
         // ---------------- USER REQUESTS ----------------
 
