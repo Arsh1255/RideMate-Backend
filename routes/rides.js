@@ -129,9 +129,9 @@ router.post("/search", async (req, res) => {
         if (matchAccuracy === 'Exact Match') radius = 300;
         if (matchAccuracy === 'Lenient Match') radius = 2000;
 
-        const depDate = new Date(date);
-        const startOfDay = new Date(depDate.setHours(0, 0, 0, 0));
-        const endOfDay = new Date(depDate.setHours(23, 59, 59, 999));
+        const datePart = date.substring(0, 10);
+        const startOfDay = new Date(`${datePart}T00:00:00.000+05:30`);
+        const endOfDay = new Date(`${datePart}T23:59:59.999+05:30`);
 
         const myRequests = await Request.find({ requesterId: currentUser._id });
         const requestedRideIds = myRequests.map(r => r.rideId);
@@ -157,7 +157,19 @@ router.post("/search", async (req, res) => {
 
             let timeMatches = true;
             if (!flexibleTime && time) {
-                const reqTime = new Date(date); // Assuming date has time or we merge it
+                let reqTime;
+                try {
+                    const [timeStr, modifier] = time.split(' ');
+                    let [hours, minutes] = timeStr.split(':');
+                    if (hours === '12') hours = '00';
+                    if (modifier === 'PM') hours = (parseInt(hours, 10) + 12).toString();
+                    const hoursStr = hours.padStart(2, '0');
+                    const minutesStr = minutes.padStart(2, '0');
+                    reqTime = new Date(`${datePart}T${hoursStr}:${minutesStr}:00.000+05:30`);
+                } catch (e) {
+                    console.error("Error parsing time in search:", e);
+                    reqTime = new Date(date);
+                }
                 const rideTime = new Date(ride.departureTime);
                 const diffMs = Math.abs(reqTime - rideTime);
                 timeMatches = diffMs <= 60 * 60 * 1000; // 1 hour
