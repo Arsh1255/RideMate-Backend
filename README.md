@@ -1,3 +1,12 @@
+---
+title: RideMateSpace
+emoji: 🚗
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # RideMate - Backend
 
 RideMate is a college-focused ride-sharing and commute coordination application designed specifically for students to share rides, split costs, and reduce their carbon footprint. 
