@@ -1,5 +1,13 @@
 const admin = require("firebase-admin");
-const serviceAccount = require("../firebase-admin-key.json");
+
+let serviceAccount;
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  // Load from Hugging Face Secret
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
+  // Fallback to local file
+  serviceAccount = require("../firebase-admin-key.json");
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)

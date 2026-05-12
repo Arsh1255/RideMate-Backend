@@ -1,4 +1,12 @@
 require("dotenv").config();
+
+// Global log suppression for production to protect PII on public Hugging Face logs
+if (process.env.NODE_ENV === 'production') {
+    console.log = function () {};
+    console.info = function () {};
+    // We leave console.error active so critical crashes can still be debugged
+}
+
 const express = require("express");
 const cors = require("cors");
 const http = require("http");
