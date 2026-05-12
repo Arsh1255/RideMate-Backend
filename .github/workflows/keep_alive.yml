@@ -1,0 +1,20 @@
+name: Keep Alive Ping
+
+on:
+  schedule:
+    # Runs at 00:00 UTC every day (every 24 hours)
+    - cron: '0 0 * * *'
+  
+  # Allows you to trigger it manually from the Actions tab if needed
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Hugging Face Space
+        run: |
+          echo "Pinging RideMate backend to keep it awake..."
+          curl -s --retry 3 https://ashhhj-ridematespace.hf.space
+          echo ""
+          echo "Ping successful!"
