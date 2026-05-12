@@ -1,5 +1,5 @@
 # Use an official lightweight Node.js runtime
-FROM node:18-bullseye-slim
+FROM node:20-bullseye-slim
 
 # The official Node image already includes a user named "node" with UID 1000.
 # Hugging Face requires UID 1000, so we just switch to this existing user!
