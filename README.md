@@ -109,3 +109,8 @@ static const String socketUrl = "YOUR_BACKEND_URL";
 
 ## 📜 Disclaimer
 This software is provided "as is", without warranty of any kind. This project was developed as a student assignment and is not audited for commercial security standards. Use at your own discretion.
+
+## 👥 Team & Contributions
+* **Abdul khadar Jamadar ([@Arsh1255](https://github.com))** - Project Owner & Lead Developer.
+* **Abdul Azeez ([@AbdulAzeez05](https://github.com))** - Team Collaborator.
+
